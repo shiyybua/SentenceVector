@@ -16,6 +16,8 @@ word_embedding_file = config.FLAGS.word_embedding_file
 model_path = config.FLAGS.model_path
 embeddings_size = config.FLAGS.embeddings_size
 max_sequence = config.FLAGS.max_sequence
+batch_size = config.FLAGS.batch_size
+num_layer = config.FLAGS.num_layer
 
 
 def print_out(line, new_line):
@@ -205,13 +207,21 @@ def load_word2vec_embedding(vocab_size):
                            shape=[vocab_size + 2, embeddings_size],
                            initializer=tf.constant_initializer(embeddings), trainable=False)
 
-build_word_index()
 
+def id2word():
+    return lookup_ops.index_to_string_table_from_file(
+        src_vocab_file, default_value='<unknown>')
+
+
+build_word_index()
+vocab_size = get_src_vocab_size()
+src_vocab_table = create_vocab_tables(src_vocab_file, vocab_size + 1)
 
 if __name__ == "__main__":
     vocab_size = get_src_vocab_size()
     src_vocab_table = create_vocab_tables(src_vocab_file, vocab_size + 1)
-    iterator = get_iterator(src_vocab_table, vocab_size, 64)
+    iterator = get_iterator(src_vocab_table, vocab_size, 8)
+    id2word = id2word()
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         sess.run(iterator.initializer)
@@ -220,5 +230,6 @@ if __name__ == "__main__":
             try:
                 source = sess.run(iterator.source)
                 print source.shape
+                # print sess.run(id2word.lookup(tf.constant(10, dtype=tf.int64)))
             except tf.errors.OutOfRangeError:
                 sess.run(iterator.initializer)

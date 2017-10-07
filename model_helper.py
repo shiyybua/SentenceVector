@@ -1,6 +1,9 @@
+# -*- coding: utf-8 -*
+
 import tensorflow as tf
 import utils
 import config
+import numpy as np
 
 FLAG = config.FLAGS
 
@@ -53,9 +56,49 @@ def _single_cell(unit_type, num_units, dropout,
 
 def create_cells(mode, num_layer):
     assert num_layer > 0
-    unit_type, num_units, dropout = FLAG.unit_type, FLAG.num_units, FLAG.dropout
+    unit_type, num_units, dropout = FLAG.unit_type, FLAG.embeddings_size, FLAG.dropout
     cell = _single_cell(unit_type, num_units, dropout, mode)
     if num_layer == 1:
         return cell
     else:  # Multi layers
         return tf.contrib.rnn.MultiRNNCell([cell for _ in range(num_layer)])
+
+
+def create_attention_mechanism(attention_option, num_units, memory,
+                               source_sequence_length):
+  """Create attention mechanism based on the attention_option."""
+
+  # Mechanism
+  if attention_option == "luong":
+    attention_mechanism = tf.contrib.seq2seq.LuongAttention(
+        num_units, memory, memory_sequence_length=source_sequence_length)
+  elif attention_option == "scaled_luong":
+    attention_mechanism = tf.contrib.seq2seq.LuongAttention(
+        num_units,
+        memory,
+        memory_sequence_length=source_sequence_length,
+        scale=True)
+  elif attention_option == "bahdanau":
+    attention_mechanism = tf.contrib.seq2seq.BahdanauAttention(
+        num_units, memory, memory_sequence_length=source_sequence_length)
+  elif attention_option == "normed_bahdanau":
+    attention_mechanism = tf.contrib.seq2seq.BahdanauAttention(
+        num_units,
+        memory,
+        memory_sequence_length=source_sequence_length,
+        normalize=True)
+  else:
+    raise ValueError("Unknown attention option %s" % attention_option)
+
+  return attention_mechanism
+
+
+def embedding_initializer(vocab_size):
+    '''
+    :param vocab_size: 不重复的单词数，不包括known，padding
+    :return: 
+    '''
+    embedding_size = FLAG.embeddings_size
+    embeddings = np.random.uniform(-1, 1, (vocab_size + 2, embedding_size))
+    embeddings = np.asarray(embeddings, dtype=np.float32)
+    return embeddings

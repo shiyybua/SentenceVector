@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*
 
-import utils
 from model_helper import *
 from tensorflow.python.layers import core as layers_core
 from tensorflow.python.util import nest
@@ -8,13 +7,13 @@ from tensorflow.python.util import nest
 
 # TODO: time_major
 class Model():
-    def __init__(self, mode=tf.contrib.learn.ModeKeys.TRAIN):
-        self.iterator = utils.get_iterator(utils.src_vocab_table,
-                                           utils.vocab_size, utils.batch_size)
+    def __init__(self,iterator, mode=tf.contrib.learn.ModeKeys.TRAIN):
+        self.iterator = iterator
         self.mode = mode
         self.source = self.iterator.source
         self.source_length = self.iterator.source_length
         self.source_before = self.iterator.source_before
+        self.source_after = self.iterator.source_after
         self.source_before_length = self.iterator.source_before_length
         self.embedding_weights = \
             tf.get_variable("embeddings", dtype=tf.float32,
@@ -22,10 +21,9 @@ class Model():
 
     def _build_encoder(self):
         '''
-        
         :return: encoder_outputs : (?,?,2*unit_num)
         '''
-        num_layer = int(utils.num_layer/1)
+        num_layer = utils.num_layer
         cell_forward = create_cells(self.mode, num_layer, utils.embeddings_size)
         cell_backward = create_cells(self.mode, num_layer, utils.embeddings_size)
         source_embedding = tf.nn.embedding_lookup(self.embedding_weights, self.source)
@@ -41,7 +39,6 @@ class Model():
             encoder_state.append(bi_encoder_state[1][layer_id])  # backward
         encoder_state = tuple(encoder_state)
 
-
         return encoder_outputs, encoder_state
 
     def _build_decoder(self, encoder_outputs, encoder_state):
@@ -51,9 +48,7 @@ class Model():
         :return: 
         '''
         alignment_history = self.mode == tf.contrib.learn.ModeKeys.INFER
-        # TODO: check the shape
         encoder_outputs = tf.transpose(encoder_outputs, [1, 0, 2])
-        print encoder_outputs
         # encoder_outputs should be batch-major
         attention_mechanism = create_attention_mechanism(
             FLAG.attention_type, FLAG.embeddings_size,
@@ -69,13 +64,6 @@ class Model():
 
         cell = GNMTAttentionMultiCell(
             attention_cell, cell)
-
-        # cell_backward = create_cells(self.model, utils.num_layer)
-        # cell_backward = tf.contrib.seq2seq.AttentionWrapper(
-        #     cell_backward,
-        #     attention_mechanism,
-        #     attention_layer_size=FLAG.embeddings_size * 2,
-        #     alignment_history=alignment_history)
 
         decoder_initial_state = tuple(
             zs.clone(cell_state=es)
@@ -98,15 +86,58 @@ class Model():
         self.output_layer = layers_core.Dense(
             utils.vocab_size+2, use_bias=False, name="output_projection")
         logits = self.output_layer(outputs.rnn_output)
+        ## Loss
+        if self.mode != tf.contrib.learn.ModeKeys.INFER:
+            loss = self._compute_loss(logits)
+        else:
+            loss = None
 
-        return logits, sample_id, final_context_state
+        return logits, loss, final_context_state, sample_id
 
-    def train(self):
+    def _compute_loss(self, logits):
+        """Compute optimization loss."""
+        def get_max_time(tensor):
+            return tensor.shape[1].value or tf.shape(tensor)[1]
+        source_before = self.source_before
+
+        max_time = get_max_time(source_before)
+        crossent = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            labels=source_before, logits=logits)
+        target_weights = tf.sequence_mask(
+            self.source_before_length, max_time, dtype=logits.dtype)
+
+        loss = tf.reduce_sum(
+            crossent * target_weights) / tf.to_float(FLAG.batch_size)
+        return loss
+
+    def build_graph(self):
+        self.mode = tf.contrib.learn.ModeKeys.TRAIN
         out, state = self._build_encoder()
-        self._build_decoder(out, state)
-        # print state
-        # print len(state)
+        res = self._build_decoder(out, state)
 
+        if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
+            self.train_loss = res[1]
+        elif self.mode == tf.contrib.learn.ModeKeys.EVAL:
+            self.eval_loss = res[1]
+        elif self.mode == tf.contrib.learn.ModeKeys.INFER:
+            self.infer_logits, _, self.final_context_state, self.sample_id = res
+            # self.sample_words = reverse_target_vocab_table.lookup(
+            #     tf.to_int64(self.sample_id))
+
+        params = tf.trainable_variables()
+        if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
+            opt = tf.train.AdamOptimizer()
+            gradients = tf.gradients(
+                self.train_loss,
+                params)
+            clipped_gradients, gradient_norm = tf.clip_by_global_norm(gradients, 5.0)
+            self.update = opt.apply_gradients(
+                zip(clipped_gradients, params))
+
+    def train(self, sess):
+        for i in range(10):
+            _, loss = sess.run([self.update, self.train_loss])
+            print 'loss', loss
 
 class GNMTAttentionMultiCell(tf.nn.rnn_cell.MultiRNNCell):
   """A MultiCell with GNMT attention style."""
@@ -161,7 +192,17 @@ class GNMTAttentionMultiCell(tf.nn.rnn_cell.MultiRNNCell):
 
     return cur_inp, tuple(new_states)
 
+
 if __name__ == '__main__':
-    model = Model()
-    model.train()
+    iterator = utils.get_iterator(utils.src_vocab_table,
+                                  utils.vocab_size, utils.batch_size)
+    model = Model(iterator)
+    model.build_graph()
+    init = tf.global_variables_initializer()
+    with tf.Session() as sess:
+        sess.run(init)
+        sess.run(iterator.initializer)
+        tf.tables_initializer().run()
+        model.train(sess)
+
 

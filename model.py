@@ -43,12 +43,12 @@ class Model():
 
     def _build_decoder(self, encoder_outputs, encoder_state):
         '''
-        :param encoder_outputs: 默认(time_step, batch_size, 2 * num_units)
+        :param encoder_outputs:
         :param encoder_state: 
         :return: 
         '''
         alignment_history = self.mode == tf.contrib.learn.ModeKeys.INFER
-        encoder_outputs = tf.transpose(encoder_outputs, [1, 0, 2])
+        # encoder_outputs = tf.transpose(encoder_outputs, [1, 0, 2])
         # encoder_outputs should be batch-major
         attention_mechanism = create_attention_mechanism(
             FLAG.attention_type, FLAG.embeddings_size,
@@ -135,9 +135,14 @@ class Model():
                 zip(clipped_gradients, params))
 
     def train(self, sess):
-        for i in range(10):
-            _, loss = sess.run([self.update, self.train_loss])
-            print 'loss', loss
+        for i in range(1000):
+            try:
+                if i % 20 == 0:
+                    _, loss = sess.run([self.update, self.train_loss])
+                    print 'loss', loss
+            except tf.errors.InvalidArgumentError:
+                sess.run(iterator.initializer)
+
 
 class GNMTAttentionMultiCell(tf.nn.rnn_cell.MultiRNNCell):
   """A MultiCell with GNMT attention style."""

@@ -3,6 +3,7 @@
 import utils
 from model_helper import *
 from tensorflow.python.layers import core as layers_core
+from tensorflow.python.util import nest
 
 
 # TODO: time_major
@@ -57,14 +58,15 @@ class Model():
         attention_mechanism = create_attention_mechanism(
             FLAG.attention_type, FLAG.embeddings_size,
             encoder_outputs, self.source_length)
-        cell = cell_list(self.mode, utils.num_layer/2, FLAG.embeddings_size)
+        cell = cell_list(self.mode, utils.num_layer, FLAG.embeddings_size)
         attention_cell = cell.pop(0)
-
         attention_cell = tf.contrib.seq2seq.AttentionWrapper(
             attention_cell,
             attention_mechanism,
-            attention_layer_size=FLAG.embeddings_size,
+            attention_layer_size=None,  # don't use attenton layer.
+            output_attention=False,
             alignment_history=alignment_history)
+
         cell = GNMTAttentionMultiCell(
             attention_cell, cell)
 
@@ -75,7 +77,6 @@ class Model():
         #     attention_layer_size=FLAG.embeddings_size * 2,
         #     alignment_history=alignment_history)
 
-        # TODO: encoder_state没有做任何处理
         decoder_initial_state = tuple(
             zs.clone(cell_state=es)
             if isinstance(zs, tf.contrib.seq2seq.AttentionWrapperState) else es
@@ -123,6 +124,42 @@ class GNMTAttentionMultiCell(tf.nn.rnn_cell.MultiRNNCell):
     self.use_new_attention = use_new_attention
     super(GNMTAttentionMultiCell, self).__init__(cells, state_is_tuple=True)
 
+  def __call__(self, inputs, state, scope=None):
+    """Run the cell with bottom layer's attention copied to all upper layers."""
+    if not nest.is_sequence(state):
+      raise ValueError(
+          "Expected state to be a tuple of length %d, but received: %s"
+          % (len(self.state_size), state))
+
+    with tf.variable_scope(scope or "multi_rnn_cell"):
+      new_states = []
+
+      with tf.variable_scope("cell_0_attention"):
+        attention_cell = self._cells[0]
+        attention_state = state[0]
+        cur_inp, new_attention_state = attention_cell(inputs, attention_state)
+        new_states.append(new_attention_state)
+
+      for i in range(1, len(self._cells)):
+        with tf.variable_scope("cell_%d" % i):
+
+          cell = self._cells[i]
+          cur_state = state[i]
+
+          if not isinstance(cur_state, tf.contrib.rnn.LSTMStateTuple):
+            raise TypeError("`state[{}]` must be a LSTMStateTuple".format(i))
+
+          if self.use_new_attention:
+            cur_state = cur_state._replace(h=tf.concat(
+                [cur_state.h, new_attention_state.attention], 1))
+          else:
+            cur_state = cur_state._replace(h=tf.concat(
+                [cur_state.h, attention_state.attention], 1))
+
+          cur_inp, new_state = cell(cur_inp, cur_state)
+          new_states.append(new_state)
+
+    return cur_inp, tuple(new_states)
 
 if __name__ == '__main__':
     model = Model()

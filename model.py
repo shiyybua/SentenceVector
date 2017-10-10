@@ -24,15 +24,24 @@ class Model():
         
         :return: encoder_outputs : (?,?,2*unit_num)
         '''
-        cell_forward = create_cells(self.model, utils.num_layer)
-        cell_backward = create_cells(self.model, utils.num_layer)
+        num_layer = int(utils.num_layer/1)
+        cell_forward = create_cells(self.mode, num_layer, utils.embeddings_size)
+        cell_backward = create_cells(self.mode, num_layer, utils.embeddings_size)
         source_embedding = tf.nn.embedding_lookup(self.embedding_weights, self.source)
         encoder_outputs, bi_encoder_state = tf.nn.bidirectional_dynamic_rnn(
             cell_forward, cell_backward, source_embedding, dtype=tf.float32,
             sequence_length=self.source_length)
         encoder_outputs = tf.concat(encoder_outputs, axis=-1)
         # model.py: 537
-        return encoder_outputs, bi_encoder_state
+
+        encoder_state = []
+        for layer_id in range(num_layer):
+            encoder_state.append(bi_encoder_state[0][layer_id])  # forward
+            encoder_state.append(bi_encoder_state[1][layer_id])  # backward
+        encoder_state = tuple(encoder_state)
+
+
+        return encoder_outputs, encoder_state
 
     def _build_decoder(self, encoder_outputs, encoder_state):
         '''
@@ -43,16 +52,22 @@ class Model():
         alignment_history = self.mode == tf.contrib.learn.ModeKeys.INFER
         # TODO: check the shape
         encoder_outputs = tf.transpose(encoder_outputs, [1, 0, 2])
+        print encoder_outputs
         # encoder_outputs should be batch-major
         attention_mechanism = create_attention_mechanism(
-            FLAG.attention_type, FLAG.embeddings_size*2,
+            FLAG.attention_type, FLAG.embeddings_size,
             encoder_outputs, self.source_length)
-        cell = create_cells(self.model, utils.num_layer)
-        cell = tf.contrib.seq2seq.AttentionWrapper(
-            cell,
+        cell = cell_list(self.mode, utils.num_layer/2, FLAG.embeddings_size)
+        attention_cell = cell.pop(0)
+
+        attention_cell = tf.contrib.seq2seq.AttentionWrapper(
+            attention_cell,
             attention_mechanism,
-            attention_layer_size=FLAG.embeddings_size*2,
+            attention_layer_size=FLAG.embeddings_size,
             alignment_history=alignment_history)
+        cell = GNMTAttentionMultiCell(
+            attention_cell, cell)
+
         # cell_backward = create_cells(self.model, utils.num_layer)
         # cell_backward = tf.contrib.seq2seq.AttentionWrapper(
         #     cell_backward,
@@ -61,8 +76,11 @@ class Model():
         #     alignment_history=alignment_history)
 
         # TODO: encoder_state没有做任何处理
-        decoder_initial_state = cell.zero_state(FLAG.batch_size, tf.flot32).clone(
-            cell_state=encoder_state)
+        decoder_initial_state = tuple(
+            zs.clone(cell_state=es)
+            if isinstance(zs, tf.contrib.seq2seq.AttentionWrapperState) else es
+            for zs, es in zip(
+                cell.zero_state(FLAG.batch_size, tf.float32), encoder_state))
         source_before_embedding = tf.nn.embedding_lookup(
             self.embedding_weights, self.source_before)
         helper = tf.contrib.seq2seq.TrainingHelper(
@@ -84,8 +102,26 @@ class Model():
 
     def train(self):
         out, state = self._build_encoder()
-        print state
-        print len(state)
+        self._build_decoder(out, state)
+        # print state
+        # print len(state)
+
+
+class GNMTAttentionMultiCell(tf.nn.rnn_cell.MultiRNNCell):
+  """A MultiCell with GNMT attention style."""
+
+  def __init__(self, attention_cell, cells, use_new_attention=False):
+    """Creates a GNMTAttentionMultiCell.
+
+    Args:
+      attention_cell: An instance of AttentionWrapper.
+      cells: A list of RNNCell wrapped with AttentionInputWrapper.
+      use_new_attention: Whether to use the attention generated from current
+        step bottom layer's output. Default is False.
+    """
+    cells = [attention_cell] + cells
+    self.use_new_attention = use_new_attention
+    super(GNMTAttentionMultiCell, self).__init__(cells, state_is_tuple=True)
 
 
 if __name__ == '__main__':

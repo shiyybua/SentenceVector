@@ -54,14 +54,20 @@ def _single_cell(unit_type, num_units, dropout,
     return single_cell
 
 
-def create_cells(mode, num_layer):
-    assert num_layer > 0
-    unit_type, num_units, dropout = FLAG.unit_type, FLAG.embeddings_size, FLAG.dropout
+def cell_list(mode, num_layer, num_units):
+    unit_type, dropout = FLAG.unit_type, FLAG.dropout
     cell = _single_cell(unit_type, num_units, dropout, mode)
+    cells = [cell for _ in range(num_layer)]
+    return cells
+
+
+def create_cells(mode, num_layer, num_units):
+    assert num_layer > 0
+    unit_type, dropout = FLAG.unit_type, FLAG.dropout
     if num_layer == 1:
-        return cell
+        return _single_cell(unit_type, num_units, dropout, mode)
     else:  # Multi layers
-        return tf.contrib.rnn.MultiRNNCell([cell for _ in range(num_layer)])
+        return tf.contrib.rnn.MultiRNNCell(cell_list(mode, num_layer, num_units))
 
 
 def create_attention_mechanism(attention_option, num_units, memory,

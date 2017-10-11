@@ -5,9 +5,8 @@ from tensorflow.python.layers import core as layers_core
 from tensorflow.python.util import nest
 
 
-# TODO: time_major
 class Model():
-    def __init__(self,iterator, mode=tf.contrib.learn.ModeKeys.TRAIN):
+    def __init__(self, iterator, mode=tf.contrib.learn.ModeKeys.TRAIN):
         self.iterator = iterator
         self.mode = mode
         self.source = self.iterator.source
@@ -18,6 +17,7 @@ class Model():
         self.embedding_weights = \
             tf.get_variable("embeddings", dtype=tf.float32,
                             initializer=embedding_initializer(utils.vocab_size))
+        self.reverse_target_vocab_table = utils.id2word
 
     def _build_encoder(self):
         '''
@@ -111,7 +111,6 @@ class Model():
         return loss
 
     def build_graph(self):
-        self.mode = tf.contrib.learn.ModeKeys.TRAIN
         out, state = self._build_encoder()
         res = self._build_decoder(out, state)
 
@@ -121,8 +120,8 @@ class Model():
             self.eval_loss = res[1]
         elif self.mode == tf.contrib.learn.ModeKeys.INFER:
             self.infer_logits, _, self.final_context_state, self.sample_id = res
-            # self.sample_words = reverse_target_vocab_table.lookup(
-            #     tf.to_int64(self.sample_id))
+            self.sample_words = self.reverse_target_vocab_table.lookup(
+                tf.to_int64(self.sample_id))
 
         params = tf.trainable_variables()
         if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
@@ -135,13 +134,43 @@ class Model():
                 zip(clipped_gradients, params))
 
     def train(self, sess):
-        for i in range(1000):
+        saver = tf.train.Saver()
+        ckpt = tf.train.get_checkpoint_state(utils.model_path)
+        if ckpt is not None:
+            path = ckpt.model_checkpoint_path
+            print 'loading pre-trained model from %s.....' % path
+            saver.restore(sess, path)
+
+        for i in range(utils.epoch):
             try:
-                if i % 20 == 0:
+                if i % 200 == 0:
                     _, loss = sess.run([self.update, self.train_loss])
                     print 'loss', loss
             except tf.errors.InvalidArgumentError:
                 sess.run(iterator.initializer)
+
+            if i % (utils.epoch / 10) == 0 and i != 0:
+                saver.save(sess, utils.model_path + 'points', global_step=i)
+
+    def inference(self, sess):
+        saver = tf.train.Saver()
+        ckpt = tf.train.get_checkpoint_state(utils.model_path)
+        if ckpt is None:
+            print 'model is not found.'
+            return
+        path = ckpt.model_checkpoint_path
+        print 'loading pre-trained model from %s.....' % path
+        saver.restore(sess, path)
+
+        while True:
+            # batch等于1的时候本来就没有padding，如果批量预测的话，记得这里需要做长度的截取。
+            try:
+                words = sess.run(self.sample_words)
+                print words
+            except tf.errors.OutOfRangeError:
+                print 'Prediction finished!'
+                break
+
 
 
 class GNMTAttentionMultiCell(tf.nn.rnn_cell.MultiRNNCell):
@@ -199,15 +228,24 @@ class GNMTAttentionMultiCell(tf.nn.rnn_cell.MultiRNNCell):
 
 
 if __name__ == '__main__':
-    iterator = utils.get_iterator(utils.src_vocab_table,
-                                  utils.vocab_size, utils.batch_size)
-    model = Model(iterator)
+    mode = tf.contrib.learn.ModeKeys.INFER
+    if mode == tf.contrib.learn.ModeKeys.INFER:
+        iterator = utils.get_predict_iterator(utils.src_vocab_table,
+                                      utils.vocab_size, 1)
+    else:
+        iterator = utils.get_iterator(utils.src_vocab_table,
+                                      utils.vocab_size, utils.batch_size)
+
+    model = Model(iterator, mode)
     model.build_graph()
     init = tf.global_variables_initializer()
     with tf.Session() as sess:
         sess.run(init)
         sess.run(iterator.initializer)
         tf.tables_initializer().run()
-        model.train(sess)
+        if mode == tf.contrib.learn.ModeKeys.INFER:
+            model.inference(sess)
+        else:
+            model.train(sess)
 
 

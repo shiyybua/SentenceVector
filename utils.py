@@ -18,6 +18,9 @@ embeddings_size = config.FLAGS.embeddings_size
 max_sequence = config.FLAGS.max_sequence
 batch_size = config.FLAGS.batch_size
 num_layer = config.FLAGS.num_layer
+model_path = config.FLAGS.model_path
+epoch = config.FLAGS.epoch
+pred_file = config.FLAGS.src_predict_file
 
 
 def print_out(line, new_line):
@@ -175,6 +178,36 @@ def get_iterator(src_vocab_table, vocab_size, batch_size, buffer_size=None, rand
         source_length=src_len,
         source_before_length=src_before_len,
         source_after_length=src_after_len)
+
+
+def get_predict_iterator(src_vocab_table, vocab_size, batch_size, max_len=max_sequence):
+    pred_dataset = tf.contrib.data.TextLineDataset(pred_file)
+    pred_dataset = pred_dataset.map(
+        lambda src: tf.string_split([src]).values)
+    if max_len:
+        pred_dataset = pred_dataset.map(lambda src: src[:max_sequence])
+
+    pred_dataset = pred_dataset.map(
+        lambda src: tf.cast(src_vocab_table.lookup(src), tf.int32))
+
+    pred_dataset = pred_dataset.map(lambda src: (src, tf.size(src)))
+
+    def batching_func(x):
+        return x.padded_batch(
+            batch_size,
+            padded_shapes=(tf.TensorShape([None]),  # src
+                           tf.TensorShape([])),  # src_len
+            padding_values=(vocab_size+1,  # src
+                            0))  # src_len -- unused
+
+    batched_dataset = batching_func(pred_dataset)
+    batched_iter = batched_dataset.make_initializable_iterator()
+    (src_ids, src_seq_len) = batched_iter.get_next()
+
+    return BatchedInput(
+        initializer=batched_iter.initializer,
+        source=src_ids,
+        source_length=src_seq_len)
 
 
 def load_word2vec_embedding(vocab_size):

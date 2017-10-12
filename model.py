@@ -93,8 +93,8 @@ class Model():
 
                 logits = self.output_layer(outputs.rnn_output)
             else:
-                start_tokens = tf.fill([1], utils.vocab_size+2)
-                end_token = utils.vocab_size+2
+                start_tokens = tf.fill([utils.batch_size], utils.vocab_size)
+                end_token = utils.vocab_size+1
                 helper = tf.contrib.seq2seq.GreedyEmbeddingHelper(
                     self.embedding_weights, start_tokens, end_token)
 
@@ -109,7 +109,7 @@ class Model():
                 # Dynamic decoding
                 outputs, final_context_state, _ = tf.contrib.seq2seq.dynamic_decode(
                     my_decoder,
-                    maximum_iterations=None,
+                    maximum_iterations=10,
                     swap_memory=True,
                     scope=decoder_scope)
                 logits = outputs.rnn_output
@@ -257,7 +257,7 @@ class GNMTAttentionMultiCell(tf.nn.rnn_cell.MultiRNNCell):
 if __name__ == '__main__':
     mode = tf.contrib.learn.ModeKeys.TRAIN
     if mode == tf.contrib.learn.ModeKeys.INFER:
-        utils.batch_size = 1
+        utils.batch_size = 2
         iterator = utils.get_predict_iterator(utils.src_vocab_table,
                                       utils.vocab_size, utils.batch_size)
     else:

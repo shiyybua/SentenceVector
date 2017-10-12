@@ -257,11 +257,11 @@ def id2word():
 
 build_word_index()
 vocab_size = get_src_vocab_size()
-src_vocab_table = create_vocab_tables(src_vocab_file, vocab_size + 1)
+src_vocab_table = create_vocab_tables(src_vocab_file, vocab_size)
 
 if __name__ == "__main__":
     vocab_size = get_src_vocab_size()
-    src_vocab_table = create_vocab_tables(src_vocab_file, vocab_size + 1)
+    src_vocab_table = create_vocab_tables(src_vocab_file, vocab_size)
     iterator = get_iterator(src_vocab_table, vocab_size, 8)
     id2word = id2word()
     with tf.Session() as sess:

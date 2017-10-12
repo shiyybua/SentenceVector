@@ -207,7 +207,16 @@ def get_predict_iterator(src_vocab_table, vocab_size, batch_size, max_len=max_se
     return BatchedInput(
         initializer=batched_iter.initializer,
         source=src_ids,
-        source_length=src_seq_len)
+        source_before=None,
+        source_after=None,
+        source_length=src_seq_len,
+        source_before_length=None,
+        source_after_length=None)
+
+    # return BatchedInput(
+    #     initializer=batched_iter.initializer,
+    #     source=src_ids,
+    #     source_length=src_seq_len)
 
 
 def load_word2vec_embedding(vocab_size):

@@ -5,3 +5,5 @@ from tensorflow.contrib.seq2seq import tile_batch
 from tensorflow.contrib.seq2seq import AttentionWrapper
 
 from tensorflow.contrib.seq2seq import BahdanauAttention
+from tensorflow.contrib.seq2seq import GreedyEmbeddingHelper
+from tensorflow.contrib.seq2seq import BasicDecoder

@@ -21,7 +21,7 @@ tf.app.flags.DEFINE_integer("batch_size", 2, "the number of cell unit")
 tf.app.flags.DEFINE_integer("num_layer", 2, "the number of cell unit")
 tf.app.flags.DEFINE_float("dropout", 0.6, "drop out")
 
-tf.app.flags.DEFINE_integer("epoch", 2000000, "epoch")
+tf.app.flags.DEFINE_integer("epoch", 1002, "epoch")
 
 FLAGS = tf.app.flags.FLAGS
 

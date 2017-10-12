@@ -17,7 +17,7 @@ class Model():
         self.embedding_weights = \
             tf.get_variable("embeddings", dtype=tf.float32,
                             initializer=embedding_initializer(utils.vocab_size))
-        self.reverse_target_vocab_table = utils.id2word
+        self.reverse_target_vocab_table = utils.id2word()
 
     def _build_encoder(self):
         '''
@@ -47,50 +47,78 @@ class Model():
         :param encoder_state: 
         :return: 
         '''
+
         alignment_history = self.mode == tf.contrib.learn.ModeKeys.INFER
-        # encoder_outputs = tf.transpose(encoder_outputs, [1, 0, 2])
-        # encoder_outputs should be batch-major
-        attention_mechanism = create_attention_mechanism(
-            FLAG.attention_type, FLAG.embeddings_size,
-            encoder_outputs, self.source_length)
-        cell = cell_list(self.mode, utils.num_layer, FLAG.embeddings_size)
-        attention_cell = cell.pop(0)
-        attention_cell = tf.contrib.seq2seq.AttentionWrapper(
-            attention_cell,
-            attention_mechanism,
-            attention_layer_size=None,  # don't use attenton layer.
-            output_attention=False,
-            alignment_history=alignment_history)
 
-        cell = GNMTAttentionMultiCell(
-            attention_cell, cell)
+        with tf.variable_scope("decoder/output_projection"):
+            self.output_layer = layers_core.Dense(
+                utils.vocab_size + 2, use_bias=False, name="output_projection")
+        with tf.variable_scope("decoder") as decoder_scope:
+            # encoder_outputs = tf.transpose(encoder_outputs, [1, 0, 2])
+            # encoder_outputs should be batch-major
+            attention_mechanism = create_attention_mechanism(
+                FLAG.attention_type, FLAG.embeddings_size,
+                encoder_outputs, self.source_length)
+            cell = cell_list(self.mode, utils.num_layer, FLAG.embeddings_size)
+            attention_cell = cell.pop(0)
+            attention_cell = tf.contrib.seq2seq.AttentionWrapper(
+                attention_cell,
+                attention_mechanism,
+                attention_layer_size=None,  # don't use attenton layer.
+                output_attention=False,
+                alignment_history=alignment_history)
 
-        decoder_initial_state = tuple(
-            zs.clone(cell_state=es)
-            if isinstance(zs, tf.contrib.seq2seq.AttentionWrapperState) else es
-            for zs, es in zip(
-                cell.zero_state(FLAG.batch_size, tf.float32), encoder_state))
-        source_before_embedding = tf.nn.embedding_lookup(
-            self.embedding_weights, self.source_before)
-        helper = tf.contrib.seq2seq.TrainingHelper(
-            source_before_embedding, self.source_before_length)
-        my_decoder = tf.contrib.seq2seq.BasicDecoder(
-            cell,
-            helper,
-            decoder_initial_state, )
-        outputs, final_context_state, _ = tf.contrib.seq2seq.dynamic_decode(
-            my_decoder, swap_memory=True)
+            cell = GNMTAttentionMultiCell(attention_cell, cell)
 
-        sample_id = outputs.sample_id
-        # 所有的地方的vocab_size都没有算padding, known
-        self.output_layer = layers_core.Dense(
-            utils.vocab_size+2, use_bias=False, name="output_projection")
-        logits = self.output_layer(outputs.rnn_output)
-        ## Loss
-        if self.mode != tf.contrib.learn.ModeKeys.INFER:
-            loss = self._compute_loss(logits)
-        else:
-            loss = None
+            decoder_initial_state = tuple(
+                zs.clone(cell_state=es)
+                if isinstance(zs, tf.contrib.seq2seq.AttentionWrapperState) else es
+                for zs, es in zip(
+                    cell.zero_state(utils.batch_size, tf.float32), encoder_state))
+
+            if self.mode != tf.contrib.learn.ModeKeys.INFER:
+                source_before_embedding = tf.nn.embedding_lookup(
+                    self.embedding_weights, self.source_before)
+                helper = tf.contrib.seq2seq.TrainingHelper(
+                    source_before_embedding, self.source_before_length)
+                my_decoder = tf.contrib.seq2seq.BasicDecoder(
+                    cell,
+                    helper,
+                    decoder_initial_state, )
+                outputs, final_context_state, _ = tf.contrib.seq2seq.dynamic_decode(
+                    my_decoder, swap_memory=True,scope=decoder_scope)
+
+                sample_id = outputs.sample_id
+                # 所有的地方的vocab_size都没有算padding, known
+
+                logits = self.output_layer(outputs.rnn_output)
+            else:
+                start_tokens = tf.fill([1], utils.vocab_size+2)
+                end_token = utils.vocab_size+2
+                helper = tf.contrib.seq2seq.GreedyEmbeddingHelper(
+                    self.embedding_weights, start_tokens, end_token)
+
+                # Decoder
+                my_decoder = tf.contrib.seq2seq.BasicDecoder(
+                    cell,
+                    helper,
+                    decoder_initial_state,
+                    output_layer=self.output_layer  # applied per timestep
+                )
+
+                # Dynamic decoding
+                outputs, final_context_state, _ = tf.contrib.seq2seq.dynamic_decode(
+                    my_decoder,
+                    maximum_iterations=None,
+                    swap_memory=True,
+                    scope=decoder_scope)
+                logits = outputs.rnn_output
+                sample_id = outputs.sample_id
+
+            if self.mode != tf.contrib.learn.ModeKeys.INFER:
+                loss = self._compute_loss(logits)
+            else:
+                loss = None
 
         return logits, loss, final_context_state, sample_id
 
@@ -107,7 +135,7 @@ class Model():
             self.source_before_length, max_time, dtype=logits.dtype)
 
         loss = tf.reduce_sum(
-            crossent * target_weights) / tf.to_float(FLAG.batch_size)
+            crossent * target_weights) / tf.to_float(utils.batch_size)
         return loss
 
     def build_graph(self):
@@ -143,9 +171,9 @@ class Model():
 
         for i in range(utils.epoch):
             try:
-                if i % 200 == 0:
+                if i % 500 == 0:
                     _, loss = sess.run([self.update, self.train_loss])
-                    print 'loss', loss
+                    print i, ' loss:', loss
             except tf.errors.InvalidArgumentError:
                 sess.run(iterator.initializer)
 
@@ -170,7 +198,6 @@ class Model():
             except tf.errors.OutOfRangeError:
                 print 'Prediction finished!'
                 break
-
 
 
 class GNMTAttentionMultiCell(tf.nn.rnn_cell.MultiRNNCell):
@@ -228,10 +255,11 @@ class GNMTAttentionMultiCell(tf.nn.rnn_cell.MultiRNNCell):
 
 
 if __name__ == '__main__':
-    mode = tf.contrib.learn.ModeKeys.INFER
+    mode = tf.contrib.learn.ModeKeys.TRAIN
     if mode == tf.contrib.learn.ModeKeys.INFER:
+        utils.batch_size = 1
         iterator = utils.get_predict_iterator(utils.src_vocab_table,
-                                      utils.vocab_size, 1)
+                                      utils.vocab_size, utils.batch_size)
     else:
         iterator = utils.get_iterator(utils.src_vocab_table,
                                       utils.vocab_size, utils.batch_size)
